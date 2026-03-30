@@ -8,3 +8,4 @@ build/
 .env
 data/*.npy
 data/*.gz
+docs/superpowers/
