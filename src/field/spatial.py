@@ -31,15 +31,21 @@ def build_activation_map(positions: torch.Tensor, activations: torch.Tensor,
     sorted_pos = flat_pos[order]
     sorted_acts = activations[order]
 
-    # Compute rank within each position
+    # Compute rank within each position — vectorized
+    # pos_change marks where a new group starts
     pos_change = torch.cat([torch.tensor([True], device=device), sorted_pos[1:] != sorted_pos[:-1]])
-    cumcount = torch.zeros(len(sorted_pos), dtype=torch.long, device=device)
-    count = 0
-    for i in range(len(cumcount)):
-        if pos_change[i]:
-            count = 0
-        cumcount[i] = count
-        count += 1
+    # cumcount: within each group of same position, count 0, 1, 2, ...
+    # Trick: cumsum of ones, minus cumsum that resets at boundaries
+    arange = torch.arange(len(sorted_pos), device=device)
+    # group_starts_idx[i] = index of the first element in this group
+    group_cumsum = pos_change.long().cumsum(0)  # 1-indexed group id
+    # scatter the index of first occurrence per group
+    n_groups = int(group_cumsum.max())
+    first_idx = torch.zeros(n_groups + 1, dtype=torch.long, device=device)
+    # Reverse iterate so smallest index wins
+    rev = torch.arange(len(sorted_pos) - 1, -1, -1, device=device)
+    first_idx[group_cumsum[rev]] = rev
+    cumcount = arange - first_idx[group_cumsum]
 
     # Only keep top n_features per position
     keep = cumcount < n_features
