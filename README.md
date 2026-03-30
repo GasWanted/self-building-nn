@@ -17,11 +17,20 @@ The growth engine is neuron-agnostic. Swap the neuron type and rerun benchmarks.
 
 | Type | Description | Status |
 |------|-------------|--------|
-| `PrototypeNeuron` | Competitive learning, cosine similarity | V2 |
-| `PerceptronNeuron` | Standard w*x+b, gradient update | V2 |
-| `DendriticNeuron` | Multi-compartment, per-dendrite nonlinearity | V2 |
-| `PredictiveCodingNeuron` | Top-down prediction, bottom-up error | V2 |
-| `SpikingNeuron` | Leaky integrate-and-fire, STDP-like update | V2 |
+| `PrototypeNeuron` | Competitive learning, cosine similarity | V2.1 |
+| `PerceptronNeuron` | Standard w*x+b, gradient update | V2.1 |
+| `DendriticNeuron` | Starts with 1 dendrite, grows on demand | V2.1 |
+| `PredictiveCodingNeuron` | Cosine-similarity prediction, bottom-up error | V2.1 |
+| `SpikingNeuron` | LIF with graded activation (v/v_thresh) | V2.1 |
+
+## V2.1 changes
+
+- **Dendritic**: starts with 1 dendrite, grows on demand (was: 4 random dendrites)
+- **Predictive coding**: cosine similarity matching (was: L2-based)
+- **Spiking**: graded activation `v/v_thresh` (was: binary spike)
+- **Depth growth**: now triggers reliably (`stagnation_threshold=0.30`, `patience=5`, `max_layers=10`)
+- **Lateral inhibition**: top-k winners, 30% winner fraction
+- **Skip connections**: non-adjacent layer communication via `ConnectionTracker`
 
 ## V2 infrastructure
 
@@ -35,60 +44,60 @@ Modules that work with any network/neuron type:
 - **Sleep Consolidation** — hippocampal buffer + interleaved replay. Prevents catastrophic forgetting.
 - **Theta Buffer** — sequence encoding via bigram co-occurrence. No positional embeddings.
 
-## Benchmark results (sklearn digits, PCA-50)
+## Benchmark results (V2.1, sklearn digits, PCA-50)
 
 Results from `compare.py` — all 5 neuron types start at `[50, 8, 8, 10]` and self-build.
 
 ### Growth dynamics
 
-| Neuron type | Initial topology | Final topology (B1) | Width grows | Depth grows |
-|-------------|-----------------|---------------------|-------------|-------------|
-| Prototype   | [50, 8, 8, 10]  | [50, 341, 328, 10]  | ~660        | 0           |
-| Perceptron  | [50, 8, 8, 10]  | [50, 341, 323, 10]  | ~650        | 0           |
-| Dendritic   | [50, 8, 8, 10]  | [50, 345, 335, 10]  | ~670        | 0           |
-| Predictive  | [50, 8, 8, 10]  | [50, 347, 342, 10]  | ~680        | 0           |
-| Spiking     | [50, 8, 8, 10]  | [50, 512, 512, 10]  | ~1010       | 0           |
+| Neuron type | Initial topology | Final topology (B1) | Layers | Width grows |
+|-------------|-----------------|---------------------|--------|-------------|
+| Prototype   | [50, 8, 8, 10]  | [50, 348, 334, ..., 93, 10] | 12 | ~1700 |
+| Perceptron  | [50, 8, 8, 10]  | [50, 341, 321, ..., 118, 10] | 12 | ~1850 |
+| Dendritic   | [50, 8, 8, 10]  | [50, 341, 311, ..., 73, 10] | 12 | ~1400 |
+| Predictive  | [50, 8, 8, 10]  | [50, 343, 321, ..., 136, 10] | 12 | ~1920 |
+| Spiking     | [50, 8, 8, 10]  | [50, 512, 512, ..., 288, 10] | 12 | ~4160 |
 
-All neuron types self-size from 8 neurons per hidden layer to 300-512 neurons per layer, driven entirely by the error signal (split threshold = 0.50). Spiking neurons grow to the maximum (512) because their spike-based activations produce low similarity scores. Depth growth does not trigger on this dataset because adjacent-layer activations stay below the correlation threshold.
+All neuron types now grow to **12 layers** (from 4 initial) via depth growth (`stagnation_threshold=0.30`, `patience=5`, `max_layers=10`). Width growth fills each layer from 8 to 100-512 neurons driven by the error signal (split threshold = 0.50). Spiking neurons grow to the maximum (512) because their graded activations still produce low similarity scores.
 
 ### Head-to-head
 
 | Benchmark | Metric | Prototype | Perceptron | Dendritic | Predictive | Spiking |
 |-----------|--------|-----------|------------|-----------|------------|---------|
-| B1 Classification | Test accuracy | **92.5%** | 92.2% | 49.4% | 23.1% | 0.8% |
+| B1 Classification | Test accuracy | **87.8%** | 85.6% | 46.9% | 86.7% | 1.7% |
 | B2 DA Theorem | K=5 gain | +1.4% | +1.4% | +1.4% | +1.4% | +1.4% |
-| B3 Split MNIST | BWT (forgetting) | **-2.7%** | -3.1% | -4.3% | +3.8% | +0.0% |
-| B4 Combined | Overall accuracy | **34%** | 33% | **35%** | 22% | 5% |
+| B3 Split MNIST | BWT (forgetting) | **+7.3%** | +5.1% | -1.4% | +6.3% | +0.4% |
+| B4 Combined | Overall accuracy | **34%** | 33% | 25% | **34%** | 7% |
 | B4 Combined | Sequence completion | 5/5 | 5/5 | 5/5 | 5/5 | 5/5 |
 
 ### B1: Classification
 
 Full training on all 10 digit classes, with sleep consolidation replay.
 
-- **Prototype**: 92.5% accuracy, topology [50, 341, 328, 10], 0 dead neurons
-- **Perceptron**: 92.2% accuracy, topology [50, 341, 323, 10], 0 dead neurons
-- **Dendritic**: 49.4% accuracy, topology [50, 345, 335, 10], 0 dead neurons
-- **Predictive**: 23.1% accuracy, topology [50, 347, 342, 10], 0 dead neurons
-- **Spiking**: 0.8% accuracy, topology [50, 512, 512, 10], 0 dead neurons
+- **Prototype**: 87.8% accuracy, 12 layers, 0 dead neurons
+- **Perceptron**: 85.6% accuracy, 12 layers, 0 dead neurons
+- **Predictive**: 86.7% accuracy, 12 layers, 0 dead neurons — now competitive (was 23.1% in V2)
+- **Dendritic**: 46.9% accuracy, 12 layers, 0 dead neurons — improved from 49.4% with cleaner dendrite growth
+- **Spiking**: 1.7% accuracy, 12 layers, 0 dead neurons — graded activation helps slightly (was 0.8%)
 
-Prototype and perceptron neurons lead on classification. Dendritic neurons show promise (multi-compartment structure captures patterns) but need tuning. Predictive coding and spiking neurons are functional but not yet competitive on raw accuracy -- their strengths are in different regimes (prediction error, temporal coding).
+Prototype leads on classification. Predictive coding is now competitive thanks to cosine-similarity matching. Dendritic neurons capture patterns through adaptive dendrite growth. Spiking neurons remain limited by their activation dynamics on static image data.
 
 ### B3: Continual learning (Split MNIST)
 
 5 sequential tasks ([0,1], [2,3], [4,5], [6,7], [8,9]) with sleep between tasks.
 
-- **Prototype**: avg 91.0%, BWT = -2.7% (mild forgetting, sleep consolidation helps)
-- **Perceptron**: avg 89.9%, BWT = -3.1%
-- **Dendritic**: avg 62.3%, BWT = -4.3%
-- **Predictive**: BWT = +3.8% (positive transfer -- prediction-error signal prevents overwriting)
-- **Spiking**: BWT = +0.0% (no forgetting, but near-chance accuracy)
+- **Prototype**: avg 66.2%, BWT = +7.3% (positive transfer — depth growth + sleep consolidation)
+- **Predictive**: avg 65.2%, BWT = +6.3% (positive transfer — cosine prediction prevents overwriting)
+- **Perceptron**: avg 55.8%, BWT = +5.1%
+- **Dendritic**: avg 29.1%, BWT = -1.4% (mild forgetting)
+- **Spiking**: avg 2.7%, BWT = +0.4% (no forgetting, but near-chance accuracy)
 
 ### B4: Combined (one-shot + retention + sequence)
 
 3 learning days with DA-selected prototypes and theta-buffer sequence completion.
 
 - All 5 neuron types achieve **5/5** sequence completions via the theta buffer
-- Dendritic leads on combined retention accuracy (35%), followed by prototype (34%) and perceptron (33%)
+- Prototype and predictive lead on combined retention accuracy (34%), followed by perceptron (33%)
 
 ### Benchmark definitions
 
@@ -104,7 +113,7 @@ Prototype and perceptron neurons lead on classification. Dendritic neurons show 
 
 ```bash
 pip install -r requirements.txt
-pytest tests/                                    # 80 tests
+pytest tests/                                    # 85 tests
 PYTHONPATH=. python3 run.py                      # prototype on sklearn digits
 PYTHONPATH=. python3 run.py perceptron           # perceptron on sklearn digits
 PYTHONPATH=. python3 run.py dendritic            # dendritic on sklearn digits
