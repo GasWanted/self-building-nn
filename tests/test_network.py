@@ -92,3 +92,25 @@ class TestNetwork:
             x = np.random.randn(10) * 5  # large variance to be novel
             net.learn(x, i % 3)
         assert net.total_neurons() >= initial  # should have grown
+
+
+class TestIntegration:
+    def test_train_and_predict_on_digits(self):
+        """End-to-end: train on sklearn digits, predict, verify non-trivial accuracy."""
+        from src.data.mnist import load_small
+        Z_tr, y_tr, Z_te, y_te, pca = load_small()
+        n_in = Z_tr.shape[1]
+
+        def nf(d, label=-1):
+            return PrototypeNeuron(d, label=label)
+
+        net = Network(n_in, 10, nf, initial_hidden_size=16)
+
+        for i in range(min(500, len(Z_tr))):
+            net.learn(Z_tr[i], int(y_tr[i]))
+
+        correct = sum(
+            net.predict(Z_te[i]) == y_te[i]
+            for i in range(min(100, len(Z_te)))
+        )
+        assert correct > 15, f"Only {correct}/100 correct — worse than random"
