@@ -8,13 +8,13 @@ class SpikingNeuron(Neuron):
     """LIF neuron with spike-timing-dependent plasticity.
 
     Membrane potential accumulates input, fires when threshold exceeded.
-    STDP: pre-before-post strengthens, post-before-pre weakens.
-    Runs n_ticks internal timesteps per activate() call.
+    Activation is graded: v / v_thresh (how close to spiking).
+    STDP learning uses spike events. Cosine similarity for voting.
     """
 
     def __init__(self, n_dim: int, label: int = -1, weights: np.ndarray = None,
                  v_thresh: float = 1.0, tau: float = 0.9, t_ref: int = 3,
-                 n_ticks: int = 5):
+                 n_ticks: int = 2):
         super().__init__(n_dim, label)
         if weights is not None:
             self.w = weights.copy()
@@ -25,11 +25,11 @@ class SpikingNeuron(Neuron):
         self.tau = tau
         self.t_ref = t_ref
         self.n_ticks = n_ticks
-        self.steps_since_spike = t_ref  # start ready to fire
+        self.steps_since_spike = t_ref
         self._last_spiked = False
 
     def activate(self, x: np.ndarray) -> float:
-        """Run n_ticks timesteps. Return 1.0 if any spike occurred, 0.0 otherwise."""
+        """Run n_ticks timesteps. Return graded activation: v/v_thresh clamped to [0, 1]."""
         spiked = False
         for _ in range(self.n_ticks):
             if self.steps_since_spike < self.t_ref:
@@ -44,10 +44,9 @@ class SpikingNeuron(Neuron):
                 else:
                     self.steps_since_spike += 1
         self._last_spiked = spiked
-        return 1.0 if spiked else 0.0
+        return float(min(1.0, max(0.0, self.v / self.v_thresh)))
 
     def update(self, x: np.ndarray, lr: float):
-        """STDP-inspired update."""
         if self._last_spiked:
             self.w += lr * x
         else:
