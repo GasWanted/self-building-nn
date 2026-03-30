@@ -75,6 +75,14 @@ class FastLayer:
         """Cosine similarities without side effects."""
         return self._cosine_sim(x)
 
+    def similarities_batch(self, X: torch.Tensor) -> torch.Tensor:
+        """Batch cosine similarity: X is (batch, n_dim) -> (batch, n_neurons)."""
+        w_norms = self.W.norm(dim=1).clamp(min=1e-9)  # (n_neurons,)
+        x_norms = X.norm(dim=1).clamp(min=1e-9)  # (batch,)
+        # (batch, n_dim) @ (n_dim, n_neurons) -> (batch, n_neurons)
+        dots = X @ self.W.t()
+        return dots / (x_norms.unsqueeze(1) * w_norms.unsqueeze(0))
+
     def best_match(self, x: torch.Tensor) -> tuple[int, float]:
         sims = self._cosine_sim(x)
         idx = int(sims.argmax())

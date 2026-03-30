@@ -92,6 +92,148 @@ class FastNetwork:
         layer.last_output = result.clone()
         return result
 
+    def _refine_batch(self, X: torch.Tensor, layer: FastLayer) -> torch.Tensor:
+        """Batch propagation: X is (batch, n_dim) -> (batch, n_dim)."""
+        # (batch, n_neurons)
+        sims = layer.similarities_batch(X)
+        acts = torch.relu(sims)
+
+        # Lateral inhibition per sample
+        if layer.size > 1:
+            k = max(1, int(layer.size * layer.winner_fraction))
+            if k < layer.size:
+                topk_vals, _ = torch.topk(acts, k, dim=1)
+                threshold = topk_vals[:, -1:] # (batch, 1)
+                mask = acts >= threshold
+                acts = torch.where(mask, acts, acts * layer.inhibition_factor)
+
+        act_sum = acts.sum(dim=1, keepdim=True).clamp(min=1e-9)  # (batch, 1)
+
+        # (batch, n_neurons, 1) * (1, n_neurons, n_dim) -> weighted shifts
+        # More efficient: use einsum
+        # shifts = W - X[:, None, :]  would be (batch, n_neurons, n_dim) — too much memory
+        # Instead: weighted_proto = (acts @ W) / act_sum, then shift = weighted_proto - X
+        weighted_proto = (acts @ layer.W) / act_sum  # (batch, n_dim)
+        shift = weighted_proto - X
+        return X + self.lr_refine * shift
+
+    def predict_batch(self, X_np: np.ndarray) -> np.ndarray:
+        """Batch predict: X_np is (batch, n_dim) -> (batch,) int labels."""
+        X = torch.tensor(X_np, dtype=torch.float32, device=self.device)
+        batch = X.shape[0]
+        votes = torch.zeros(batch, self.n_output, device=self.device)
+
+        h = X
+        for layer in self.layers:
+            sims = layer.similarities_batch(h)  # (batch, n_neurons)
+            # Voting: for each sample, accumulate sims into label buckets
+            valid_labels = layer.labels.clamp(0, self.n_output - 1)  # (n_neurons,)
+            # mask out invalid labels and low sims
+            mask = (sims > 0.05) & (layer.labels >= 0).unsqueeze(0) & (layer.labels < self.n_output).unsqueeze(0)
+            masked_sims = sims * mask.float()  # (batch, n_neurons)
+            # scatter add: for each neuron, add its sim to the label bucket
+            label_expanded = valid_labels.unsqueeze(0).expand(batch, -1)  # (batch, n_neurons)
+            votes.scatter_add_(1, label_expanded, masked_sims)
+            h = self._refine_batch(h, layer)
+
+        # Output layer
+        out_sims = self.output_layer.similarities_batch(h)
+        valid_labels = self.output_layer.labels.clamp(0, self.n_output - 1)
+        mask = (out_sims > 0.05) & (self.output_layer.labels >= 0).unsqueeze(0) & (self.output_layer.labels < self.n_output).unsqueeze(0)
+        masked_sims = out_sims * mask.float()
+        label_expanded = valid_labels.unsqueeze(0).expand(batch, -1)
+        votes.scatter_add_(1, label_expanded, masked_sims)
+
+        return votes.argmax(dim=1).cpu().numpy()
+
+    def learn_batch(self, X_np: np.ndarray, y_np: np.ndarray, batch_size: int = 256):
+        """Batch learn with mini-batch processing.
+
+        For each mini-batch:
+        1. Batch compute similarities for all samples (GPU parallel)
+        2. Classify samples into merge/grow/partial update
+        3. Batch update merged neurons
+        4. Grow new neurons for novel samples (sequential but rare)
+        """
+        X_all = torch.tensor(X_np, dtype=torch.float32, device=self.device)
+        y_all = torch.tensor(y_np, dtype=torch.long, device=self.device)
+        n = X_all.shape[0]
+
+        for batch_start in range(0, n, batch_size):
+            batch_end = min(batch_start + batch_size, n)
+            X = X_all[batch_start:batch_end]
+            y = y_all[batch_start:batch_end]
+            bs = X.shape[0]
+            self.step += bs
+
+            h = X  # (bs, n_dim)
+            for layer in self.layers:
+                # Batch similarities: (bs, n_neurons)
+                sims = layer.similarities_batch(h)
+                best_sims, best_idxs = sims.max(dim=1)  # (bs,), (bs,)
+
+                # Classify samples
+                merge_mask = best_sims >= self.merge_threshold
+                grow_mask = (best_sims < self.split_threshold) & ((1.0 - best_sims) > 0.02)
+                partial_mask = ~merge_mask & ~grow_mask
+
+                # Batch update for merged samples
+                if merge_mask.any():
+                    m_idx = best_idxs[merge_mask]  # neuron indices
+                    m_h = h[merge_mask]  # input vectors
+                    m_labels = y[merge_mask]
+                    # Update each winning neuron (some may win multiple times)
+                    for j in range(m_idx.shape[0]):
+                        ni = int(m_idx[j])
+                        layer.W[ni] += self.lr * (m_h[j] - layer.W[ni])
+                        layer.fire_counts[ni] += 1
+                        layer.last_fire[ni] = self.step
+                        layer.labels[ni] = int(m_labels[j])
+
+                # Partial update
+                if partial_mask.any():
+                    p_idx = best_idxs[partial_mask]
+                    p_h = h[partial_mask]
+                    for j in range(p_idx.shape[0]):
+                        ni = int(p_idx[j])
+                        layer.W[ni] += (self.lr * 0.25) * (p_h[j] - layer.W[ni])
+                        layer.fire_counts[ni] += 1
+                        layer.last_fire[ni] = self.step
+
+                # Grow for novel samples (capped per batch to prevent explosion)
+                if grow_mask.any() and layer.size < self.max_neurons_per_layer:
+                    g_h = h[grow_mask]
+                    g_labels = y[grow_mask]
+                    # Limit growth: max 10 new neurons per batch per layer
+                    n_grow = min(g_h.shape[0], 10, self.max_neurons_per_layer - layer.size)
+                    # Pick the most novel (lowest best_sim)
+                    g_sims = best_sims[grow_mask]
+                    _, novelty_order = g_sims.sort()
+                    for j in range(n_grow):
+                        k = int(novelty_order[j])
+                        layer.grow(g_h[k], int(g_labels[k]), self.growth_noise)
+                        self.n_width_grows += 1
+
+                # Batch refine: propagate to next layer
+                h = self._refine_batch(h, layer)
+
+            # Output layer batch update
+            out_sims = self.output_layer.similarities_batch(h)
+            out_best = out_sims.argmax(dim=1)
+            for j in range(bs):
+                ni = int(out_best[j])
+                self.output_layer.W[ni] += self.lr * (h[j] - self.output_layer.W[ni])
+                self.output_layer.labels[ni] = int(y[j])
+
+            # Depth + prune checks (once per batch, not per sample)
+            if self.step % (self.depth_check_interval * batch_size) < batch_size:
+                # Quick check on last sample
+                pred = int(self.output_layer._cosine_sim(h[-1]).argmax())
+                self._check_depth_growth(pred == int(y[-1]))
+
+            if self.step % 500 < batch_size:
+                self._prune()
+
     def predict(self, x_np: np.ndarray) -> int:
         """Predict class label."""
         x = torch.tensor(x_np, dtype=torch.float32, device=self.device)
