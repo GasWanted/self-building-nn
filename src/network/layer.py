@@ -24,6 +24,8 @@ class Layer:
         self.step = 0
         self.winner_fraction = winner_fraction
         self.inhibition_factor = inhibition_factor
+        self.last_input = None
+        self.last_output = None
 
     @property
     def size(self) -> int:

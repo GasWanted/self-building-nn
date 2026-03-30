@@ -11,10 +11,12 @@ def refine(x: np.ndarray, layer: Layer, lr_refine: float = 0.3) -> np.ndarray:
     All layers operate in the same d-dimensional space.
     If no neurons activate, returns x unchanged (passthrough).
     """
+    layer.last_input = x.copy()
     acts = layer.forward(x)
     act_sum = acts.sum()
 
     if act_sum < 1e-9:
+        layer.last_output = x.copy()
         return x.copy()
 
     weights = np.array([n.get_weights() for n in layer.neurons])
@@ -22,4 +24,6 @@ def refine(x: np.ndarray, layer: Layer, lr_refine: float = 0.3) -> np.ndarray:
     shifts = weights - x[None, :]  # (n_neurons, d)
     weighted_shift = (acts[:, None] * shifts).sum(axis=0) / act_sum
 
-    return x + lr_refine * weighted_shift
+    result = x + lr_refine * weighted_shift
+    layer.last_output = result.copy()
+    return result

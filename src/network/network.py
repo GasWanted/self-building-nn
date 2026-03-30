@@ -4,8 +4,7 @@ import numpy as np
 from src.neurons.base import Neuron
 from src.network.layer import Layer
 from src.network.propagation import refine
-from src.signals.error import should_grow_width
-from src.signals.information import should_grow_depth
+from src.signals.error import should_grow_width, should_grow_depth_v2
 
 
 class Network:
@@ -27,7 +26,9 @@ class Network:
         depth_check_interval: int = 500,
         merge_threshold: float = 0.85,
         split_threshold: float = 0.50,
-        depth_threshold: float = 0.85,
+        stagnation_threshold: float = 0.05,
+        depth_patience: int = 50,
+        depth_decay: float = 0.95,
         prune_age: int = 3000,
         prune_window: int = 3000,
         min_layer_size: int = 4,
@@ -50,7 +51,9 @@ class Network:
         self.merge_threshold = merge_threshold
         self.merge_threshold_0 = merge_threshold
         self.split_threshold = split_threshold
-        self.depth_threshold = depth_threshold
+        self.stagnation_threshold = stagnation_threshold
+        self.depth_patience = depth_patience
+        self.depth_decay = depth_decay
         self.prune_age = prune_age
         self.prune_window = prune_window
         self.min_layer_size = min_layer_size
@@ -71,6 +74,9 @@ class Network:
         # Output layer: one neuron per class
         out_neurons = [neuron_factory(n_input, label=c) for c in range(n_output)]
         self.output_layer = Layer(out_neurons)
+
+        # Depth growth tracking
+        self.layer_wrong_counts = [0.0] * n_initial_layers
 
         # Stats
         self.step = 0
@@ -136,7 +142,8 @@ class Network:
 
         # Periodic checks
         if self.step % self.depth_check_interval == 0:
-            self._check_depth_growth()
+            pred = self.predict(x)
+            self._check_depth_growth(pred == label)
 
         if self.step % 500 == 0:
             self._prune()
@@ -152,25 +159,36 @@ class Network:
             layer.neurons[-1].label = label
             self.n_width_grows += 1
 
-    def _check_depth_growth(self):
-        """Insert a new layer if information signal says so."""
+    def _check_depth_growth(self, prediction_correct: bool):
+        """Check depth growth using prediction-error signal."""
         if len(self.layers) >= self.max_layers:
             return
 
-        # Check adjacent pairs
-        for i in range(len(self.layers) - 1):
-            la = self.layers[i]
-            lb = self.layers[i + 1]
-            if la.size == 0 or lb.size == 0:
+        while len(self.layer_wrong_counts) < len(self.layers):
+            self.layer_wrong_counts.append(0.0)
+
+        for i, layer in enumerate(self.layers):
+            self.layer_wrong_counts[i] *= self.depth_decay
+
+            if layer.last_input is None or layer.last_output is None:
                 continue
 
-            if should_grow_depth(
-                la.last_activations, lb.last_activations, self.depth_threshold
+            input_norm = np.linalg.norm(layer.last_input) + 1e-9
+            diff_norm = np.linalg.norm(layer.last_output - layer.last_input)
+            transformation_ratio = diff_norm / input_norm
+
+            if not prediction_correct and transformation_ratio < self.stagnation_threshold:
+                self.layer_wrong_counts[i] += 1.0
+
+            if should_grow_depth_v2(
+                transformation_ratio, self.stagnation_threshold,
+                self.layer_wrong_counts[i], self.depth_patience
             ):
-                new_layer = la.duplicate(self.growth_noise)
+                new_layer = layer.duplicate(self.growth_noise)
                 self.layers.insert(i + 1, new_layer)
+                self.layer_wrong_counts.insert(i + 1, 0.0)
                 self.n_depth_grows += 1
-                break  # One insertion per check
+                break
 
     def _prune(self):
         """Remove dead neurons and empty layers."""

@@ -26,7 +26,8 @@ class TestGrowthDynamics:
             growth_interval=10,
             depth_check_interval=100,
             split_threshold=0.35,
-            depth_threshold=0.85,
+            stagnation_threshold=0.05,
+            depth_patience=50,
             prune_age=500,
             prune_window=500,
         )

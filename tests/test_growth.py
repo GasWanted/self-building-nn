@@ -1,7 +1,7 @@
 """Tests for growth signals."""
 
 import numpy as np
-from src.signals.error import should_grow_width
+from src.signals.error import should_grow_width, should_grow_depth_v2
 from src.signals.information import should_grow_depth
 
 
@@ -39,3 +39,29 @@ class TestInformationSignal:
 
     def test_short_arrays_no_depth(self):
         assert should_grow_depth(np.array([1.0]), np.array([1.0]), 0.9) is False
+
+
+class TestPredictionErrorDepthSignal:
+    def test_stagnant_and_wrong_triggers(self):
+        assert should_grow_depth_v2(
+            transformation_ratio=0.01, stagnation_threshold=0.05,
+            wrong_count=60, patience=50,
+        ) is True
+
+    def test_transforming_no_trigger(self):
+        assert should_grow_depth_v2(
+            transformation_ratio=0.3, stagnation_threshold=0.05,
+            wrong_count=100, patience=50,
+        ) is False
+
+    def test_stagnant_but_patient(self):
+        assert should_grow_depth_v2(
+            transformation_ratio=0.01, stagnation_threshold=0.05,
+            wrong_count=30, patience=50,
+        ) is False
+
+    def test_correct_predictions_no_trigger(self):
+        assert should_grow_depth_v2(
+            transformation_ratio=0.01, stagnation_threshold=0.05,
+            wrong_count=0, patience=50,
+        ) is False
