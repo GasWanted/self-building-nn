@@ -1,22 +1,23 @@
-"""Dendritic neuron — multiple input compartments with winner-take-all."""
+"""Dendritic neuron — multiple input compartments with on-demand growth."""
 
 import numpy as np
 from .base import Neuron
 
 
 class DendriticNeuron(Neuron):
-    """A neuron with multiple dendrites, each with its own weight vector.
+    """A neuron with multiple dendrites that grow on demand.
 
-    Activation = max across dendrites (winner-take-all).
-    One dendritic neuron can solve XOR because different dendrites
-    respond to different input regions.
+    Starts with 1 dendrite. Adds more when absorbing inputs that don't
+    match any existing dendrite (similarity < dendrite_threshold).
+    Max dendrites capped at max_dendrites.
     """
 
     def __init__(self, n_dim: int, label: int = -1, n_dendrites: int = 4):
         super().__init__(n_dim, label)
-        self.n_dendrites = n_dendrites
-        self.dendrite_weights = [np.random.randn(n_dim) * 0.1 for _ in range(n_dendrites)]
+        self.max_dendrites = n_dendrites
+        self.dendrite_weights = [np.random.randn(n_dim) * 0.1]
         self._best_dendrite = 0
+        self.dendrite_threshold = 0.5
 
     def _dendrite_sim(self, x: np.ndarray, w: np.ndarray) -> float:
         nw = np.linalg.norm(w)
@@ -31,8 +32,12 @@ class DendriticNeuron(Neuron):
         return max(0.0, sims[self._best_dendrite])
 
     def update(self, x: np.ndarray, lr: float):
-        w = self.dendrite_weights[self._best_dendrite]
-        self.dendrite_weights[self._best_dendrite] = w + lr * (x - w)
+        best_sim = self._dendrite_sim(x, self.dendrite_weights[self._best_dendrite])
+        if best_sim < self.dendrite_threshold and len(self.dendrite_weights) < self.max_dendrites:
+            self.dendrite_weights.append(x.copy())
+        else:
+            w = self.dendrite_weights[self._best_dendrite]
+            self.dendrite_weights[self._best_dendrite] = w + lr * (x - w)
 
     def similarity(self, x: np.ndarray) -> float:
         sims = [self._dendrite_sim(x, w) for w in self.dendrite_weights]
@@ -43,13 +48,15 @@ class DendriticNeuron(Neuron):
         return self.dendrite_weights[self._best_dendrite].copy()
 
     def copy(self, noise: float = 0.005) -> "DendriticNeuron":
-        new = DendriticNeuron(self.n_dim, self.label, self.n_dendrites)
+        new = DendriticNeuron(self.n_dim, self.label, self.max_dendrites)
         new.dendrite_weights = [w.copy() + np.random.randn(self.n_dim) * noise
                                 for w in self.dendrite_weights]
+        new.dendrite_threshold = self.dendrite_threshold
         return new
 
     def state(self) -> dict:
         d = super().state()
-        d["n_dendrites"] = self.n_dendrites
+        d["max_dendrites"] = self.max_dendrites
+        d["n_active_dendrites"] = len(self.dendrite_weights)
         d["best_dendrite"] = self._best_dendrite
         return d
