@@ -94,6 +94,44 @@ class TestNetwork:
         assert net.total_neurons() >= initial  # should have grown
 
 
+class TestPropagation:
+    def test_refine_same_dimension(self):
+        """Output has same dimension as input."""
+        from src.network.propagation import refine
+        from src.neurons import PrototypeNeuron
+        from src.network.layer import Layer
+        neurons = [PrototypeNeuron(10, label=i, weights=np.random.randn(10)) for i in range(5)]
+        layer = Layer(neurons)
+        x = np.random.randn(10)
+        x_out = refine(x, layer)
+        assert x_out.shape == x.shape
+
+    def test_refine_shifts_toward_prototypes(self):
+        """Output should be closer to the best-matching neuron than input was."""
+        from src.network.propagation import refine
+        from src.neurons import PrototypeNeuron
+        from src.network.layer import Layer
+        target = np.ones(10)
+        neurons = [PrototypeNeuron(10, label=0, weights=target)]
+        layer = Layer(neurons)
+        x = np.ones(10) * 0.1  # small positive vector (activates via cosine sim)
+        x_out = refine(x, layer, lr_refine=0.5)
+        dist_before = np.linalg.norm(x - target)
+        dist_after = np.linalg.norm(x_out - target)
+        assert dist_after < dist_before
+
+    def test_refine_passthrough_on_zero_activation(self):
+        """If no neurons activate, output equals input."""
+        from src.network.propagation import refine
+        from src.neurons import PrototypeNeuron
+        from src.network.layer import Layer
+        neurons = [PrototypeNeuron(10, label=0, weights=np.ones(10) * 100)]
+        layer = Layer(neurons)
+        x = -np.ones(10) * 100
+        x_out = refine(x, layer)
+        np.testing.assert_array_almost_equal(x_out, x)
+
+
 class TestIntegration:
     def test_train_and_predict_on_digits(self):
         """End-to-end: train on sklearn digits, predict, verify non-trivial accuracy."""

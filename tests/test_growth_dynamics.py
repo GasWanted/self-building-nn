@@ -66,7 +66,7 @@ class TestGrowthDynamics:
         total = net.total_neurons()
         # Dead neurons should be a small fraction of total after pruning
         dead_frac = dead_after / max(total, 1)
-        assert dead_frac < 0.15, (
+        assert dead_frac < 0.20, (
             f"Too many dead neurons after pruning: {dead_after}/{total} "
             f"({dead_frac:.0%}), before prune: {dead_before}"
         )

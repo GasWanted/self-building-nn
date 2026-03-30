@@ -3,6 +3,7 @@
 import numpy as np
 from src.neurons.base import Neuron
 from src.network.layer import Layer
+from src.network.propagation import refine
 from src.signals.error import should_grow_width
 from src.signals.information import should_grow_depth
 
@@ -34,12 +35,14 @@ class Network:
         max_layers: int = 20,
         max_neurons_per_layer: int = 512,
         lr: float = 0.04,
+        lr_refine: float = 0.3,
         ach_decay: float = 0.55,
     ):
         self.n_input = n_input
         self.n_output = n_output
         self.neuron_factory = neuron_factory
         self.lr = lr
+        self.lr_refine = lr_refine
 
         # Growth parameters
         self.growth_interval = growth_interval
@@ -79,16 +82,7 @@ class Network:
         """Forward pass through all layers. Returns output activations."""
         h = x
         for layer in self.layers:
-            acts = layer.forward(h)
-            # Pass through: use activation-weighted combination of neuron weights
-            # as input to next layer. This gives a representation, not just scalars.
-            if layer.size > 0:
-                weights = np.array([n.get_weights() for n in layer.neurons])
-                act_sum = acts.sum()
-                if act_sum > 1e-9:
-                    h = (acts[:, None] * weights).sum(axis=0) / act_sum
-                # If nothing activated, h passes through unchanged
-
+            h = refine(h, layer, self.lr_refine)
         out = self.output_layer.forward(h)
         return out
 
@@ -103,13 +97,7 @@ class Network:
             for n, s in zip(layer.neurons, sims):
                 if s > 0.05 and 0 <= n.label < self.n_output:
                     votes[n.label] += s
-            # Propagate
-            acts = layer.forward(h)
-            if layer.size > 0:
-                weights = np.array([n.get_weights() for n in layer.neurons])
-                act_sum = acts.sum()
-                if act_sum > 1e-9:
-                    h = (acts[:, None] * weights).sum(axis=0) / act_sum
+            h = refine(h, layer, self.lr_refine)
 
         # Output layer vote
         out_sims = self.output_layer.similarities(h)
@@ -141,13 +129,7 @@ class Network:
                 best.update(h, self.lr * 0.25)
                 best.fire(self.step)
 
-            # Propagate
-            acts = layer.forward(h)
-            if layer.size > 0:
-                weights = np.array([n.get_weights() for n in layer.neurons])
-                act_sum = acts.sum()
-                if act_sum > 1e-9:
-                    h = (acts[:, None] * weights).sum(axis=0) / act_sum
+            h = refine(h, layer, self.lr_refine)
 
         # Update output layer
         self.output_layer.update_neurons(h, self.lr, label)
