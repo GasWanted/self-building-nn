@@ -4,6 +4,7 @@ import sys
 from src.neurons import (PrototypeNeuron, PerceptronNeuron, DendriticNeuron,
                          PredictiveCodingNeuron, SpikingNeuron)
 from src.network.network import Network
+from src.network.fast_network import FastNetwork
 from src.data.mnist import load_small, load_mnist
 from src.benchmarks.harness import run_all
 
@@ -38,8 +39,12 @@ if __name__ == "__main__":
     Z_tr, y_tr, Z_te, y_te, pca = loader()
     n_input = Z_tr.shape[1]
 
-    neuron_class = NEURON_TYPES[neuron_name]
-    factory = make_factory(neuron_class, n_input)
+    if "--fast" in sys.argv:
+        factory = lambda: FastNetwork(n_input)
+        neuron_name = "fast"
+    else:
+        neuron_class = NEURON_TYPES[neuron_name]
+        factory = make_factory(neuron_class, n_input)
     data_loader = lambda: (Z_tr, y_tr, Z_te, y_te, pca)
 
     results = run_all(factory, data_loader, label=f"{neuron_name} ({data_name})")
