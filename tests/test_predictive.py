@@ -13,17 +13,24 @@ class TestPredictiveCodingNeuron:
     def test_high_activation_when_matched(self):
         n = PredictiveCodingNeuron(10, weights=np.ones(10))
         act = n.activate(np.ones(10))
-        assert act > 0.5
+        assert act > 0.9
 
-    def test_low_activation_when_mismatched(self):
-        n = PredictiveCodingNeuron(10, weights=np.ones(10))
-        act = n.activate(-np.ones(10) * 10)
-        assert act < 0.5
+    def test_low_activation_on_orthogonal(self):
+        w = np.zeros(10); w[0] = 1.0
+        n = PredictiveCodingNeuron(10, weights=w)
+        x = np.zeros(10); x[1] = 1.0
+        act = n.activate(x)
+        assert act == 0.0
 
-    def test_similarity_high_when_close(self):
+    def test_similarity_is_cosine(self):
         n = PredictiveCodingNeuron(10, weights=np.ones(10))
         sim = n.similarity(np.ones(10))
-        assert sim > 0.8
+        assert abs(sim - 1.0) < 0.01
+
+    def test_similarity_negative_for_opposite(self):
+        n = PredictiveCodingNeuron(10, weights=np.ones(10))
+        sim = n.similarity(-np.ones(10))
+        assert sim < 0
 
     def test_update_reduces_error(self):
         n = PredictiveCodingNeuron(10, weights=np.zeros(10))

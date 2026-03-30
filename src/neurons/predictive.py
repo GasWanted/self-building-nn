@@ -7,9 +7,9 @@ from .base import Neuron
 class PredictiveCodingNeuron(Neuron):
     """A neuron that represents a predictive model of its preferred input.
 
-    Activation is inversely proportional to prediction error:
-    high activation = input matches prediction (low surprise).
-    Learns by moving weights toward inputs (reducing future error).
+    Uses cosine similarity for activation/similarity (compatible with
+    whitened PCA space). Learns by moving weights toward inputs
+    (reducing prediction error).
     """
 
     def __init__(self, n_dim: int, label: int = -1, weights: np.ndarray = None):
@@ -19,18 +19,22 @@ class PredictiveCodingNeuron(Neuron):
         else:
             self.w = np.random.randn(n_dim) * 0.1
 
+    def _cosine_sim(self, x: np.ndarray) -> float:
+        nw = np.linalg.norm(self.w)
+        nx = np.linalg.norm(x)
+        if nw < 1e-9 or nx < 1e-9:
+            return 0.0
+        return float(np.dot(self.w, x) / (nw * nx))
+
     def activate(self, x: np.ndarray) -> float:
-        error = np.linalg.norm(x - self.w)
-        return float(1.0 / (1.0 + error))
+        return max(0.0, self._cosine_sim(x))
 
     def update(self, x: np.ndarray, lr: float):
         prediction_error = x - self.w
         self.w += lr * prediction_error
 
     def similarity(self, x: np.ndarray) -> float:
-        error = np.linalg.norm(x - self.w)
-        denom = np.linalg.norm(x) + np.linalg.norm(self.w) + 1e-9
-        return float(1.0 - error / denom)
+        return self._cosine_sim(x)
 
     def get_weights(self) -> np.ndarray:
         return self.w.copy()
