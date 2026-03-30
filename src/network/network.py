@@ -4,6 +4,7 @@ import numpy as np
 from src.neurons.base import Neuron
 from src.network.layer import Layer
 from src.network.propagation import refine
+from src.network.connections import ConnectionTracker
 from src.signals.error import should_grow_width, should_grow_depth_v2
 
 
@@ -78,6 +79,13 @@ class Network:
         # Depth growth tracking
         self.layer_wrong_counts = [0.0] * n_initial_layers
 
+        # Skip connection tracking
+        self.conn_tracker = ConnectionTracker(n_initial_layers)
+        self.connection_check_interval = 200
+        self.connection_similarity_threshold = 0.3
+        self.connection_prune_window = 1000
+        self._conn_usage = {}
+
         # Stats
         self.step = 0
         self.n_width_grows = 0
@@ -86,9 +94,13 @@ class Network:
 
     def forward(self, x: np.ndarray) -> np.ndarray:
         """Forward pass through all layers. Returns output activations."""
+        representations = {-1: x}
         h = x
-        for layer in self.layers:
+        for i, layer in enumerate(self.layers):
+            if i > 0 and self.conn_tracker.n_layers > i:
+                h = self.conn_tracker.blend_inputs(i, representations)
             h = refine(h, layer, self.lr_refine)
+            representations[i] = h
         out = self.output_layer.forward(h)
         return out
 
@@ -97,13 +109,17 @@ class Network:
         # Weighted vote across all layers + output
         votes = np.zeros(self.n_output)
 
+        representations = {-1: x}
         h = x
-        for layer in self.layers:
+        for i, layer in enumerate(self.layers):
+            if i > 0 and self.conn_tracker.n_layers > i:
+                h = self.conn_tracker.blend_inputs(i, representations)
             sims = layer.similarities(h)
             for n, s in zip(layer.neurons, sims):
                 if s > 0.05 and 0 <= n.label < self.n_output:
                     votes[n.label] += s
             h = refine(h, layer, self.lr_refine)
+            representations[i] = h
 
         # Output layer vote
         out_sims = self.output_layer.similarities(h)
@@ -145,6 +161,9 @@ class Network:
             pred = self.predict(x)
             self._check_depth_growth(pred == label)
 
+        if self.step % self.connection_check_interval == 0:
+            self._check_connections()
+
         if self.step % 500 == 0:
             self._prune()
 
@@ -158,6 +177,31 @@ class Network:
             layer.neurons[-1].update(x, 1.0)  # lr=1.0 snaps weight to x
             layer.neurons[-1].label = label
             self.n_width_grows += 1
+
+    def _check_connections(self):
+        """Check if non-adjacent layers provide useful signal."""
+        if len(self.layers) < 3:
+            return
+        for target_idx in range(2, len(self.layers)):
+            layer = self.layers[target_idx]
+            for source_idx in range(target_idx - 2, -1, -1):
+                source_layer = self.layers[source_idx]
+                if source_layer.last_output is None:
+                    continue
+                sims = layer.similarities(source_layer.last_output)
+                avg_sim = float(np.mean(sims[sims > 0])) if np.any(sims > 0) else 0
+                if avg_sim > self.connection_similarity_threshold:
+                    current = self.conn_tracker.get_sources(target_idx)
+                    if source_idx not in current:
+                        self.conn_tracker.add_connection(target_idx, source_idx, 0.5)
+                    self._conn_usage[(target_idx, source_idx)] = self.step
+        to_remove = []
+        for (t, s), last_used in self._conn_usage.items():
+            if self.step - last_used > self.connection_prune_window:
+                to_remove.append((t, s))
+        for t, s in to_remove:
+            self.conn_tracker.remove_connection(t, s)
+            del self._conn_usage[(t, s)]
 
     def _check_depth_growth(self, prediction_correct: bool):
         """Check depth growth using prediction-error signal."""
@@ -187,6 +231,7 @@ class Network:
                 new_layer = layer.duplicate(self.growth_noise)
                 self.layers.insert(i + 1, new_layer)
                 self.layer_wrong_counts.insert(i + 1, 0.0)
+                self.conn_tracker.rebuild(len(self.layers))
                 self.n_depth_grows += 1
                 break
 
@@ -204,6 +249,7 @@ class Network:
             self.layers = [Layer(neurons)]
 
         self.n_prunes += dead_before - self.dead_neurons()
+        self.conn_tracker.rebuild(len(self.layers))
 
     def tighten(self):
         """Tighten merge threshold (ACh decay). Called after sleep."""
