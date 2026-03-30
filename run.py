@@ -12,7 +12,6 @@ def make_factory(neuron_class, n_input):
     def network_factory():
         return Network(
             n_input=n_input, n_output=10, neuron_factory=neuron_factory,
-            initial_hidden_size=16, n_initial_layers=2,
         )
     return network_factory
 
