@@ -2,6 +2,7 @@
 
 import numpy as np
 from src.neurons.base import Neuron
+from src.network.inhibition import apply_inhibition
 
 
 class Layer:
@@ -13,13 +14,16 @@ class Layer:
 
     _uid = 0
 
-    def __init__(self, neurons: list[Neuron] = None):
+    def __init__(self, neurons: list = None, winner_fraction: float = 0.3,
+                 inhibition_factor: float = 0.1):
         self.id = Layer._uid
         Layer._uid += 1
         self.neurons = neurons or []
         self.last_activations = np.array([])
         self.activation_variance = 0.0
         self.step = 0
+        self.winner_fraction = winner_fraction
+        self.inhibition_factor = inhibition_factor
 
     @property
     def size(self) -> int:
@@ -29,15 +33,13 @@ class Layer:
         """Activate all neurons, return activation vector."""
         self.step += 1
         acts = np.array([n.activate(x) for n in self.neurons])
+        acts = apply_inhibition(acts, self.winner_fraction, self.inhibition_factor)
         self.last_activations = acts
         self.activation_variance = float(np.var(acts)) if len(acts) > 1 else 0.0
-
-        # Track which neurons fired (activation > 0)
         for i, a in enumerate(acts):
             self.neurons[i].tick()
             if a > 0:
                 self.neurons[i].fire(self.step)
-
         return acts
 
     def similarities(self, x: np.ndarray) -> np.ndarray:
@@ -87,7 +89,7 @@ class Layer:
     def duplicate(self, noise: float = 0.005) -> "Layer":
         """Copy the entire layer (mitosis). Returns new layer with copied neurons."""
         new_neurons = [n.copy(noise) for n in self.neurons]
-        return Layer(new_neurons)
+        return Layer(new_neurons, self.winner_fraction, self.inhibition_factor)
 
     def update_neurons(self, x: np.ndarray, lr: float, label: int = -1):
         """Update the best-matching neuron (competitive learning)."""
