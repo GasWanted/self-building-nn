@@ -18,6 +18,9 @@ class PerceptronNeuron(Neuron):
             self.w = np.random.randn(n_dim) * (2.0 / n_dim) ** 0.5
         self.b = 0.0
 
+    def get_weights(self) -> np.ndarray:
+        return self.w.copy()
+
     def activate(self, x: np.ndarray) -> float:
         return float(max(0.0, np.dot(self.w, x) + self.b))
 

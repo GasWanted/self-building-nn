@@ -31,6 +31,10 @@ class Neuron(ABC):
         """How well does this neuron match input x. Returns value in [-1, 1]."""
 
     @abstractmethod
+    def get_weights(self) -> np.ndarray:
+        """Return a copy of this neuron's weight representation."""
+
+    @abstractmethod
     def copy(self, noise: float = 0.005) -> "Neuron":
         """Duplicate self with small noise to break symmetry (mitosis)."""
 

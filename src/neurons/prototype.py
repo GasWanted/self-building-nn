@@ -17,6 +17,9 @@ class PrototypeNeuron(Neuron):
         else:
             self.w = np.random.randn(n_dim) * 0.1
 
+    def get_weights(self) -> np.ndarray:
+        return self.w.copy()
+
     def activate(self, x: np.ndarray) -> float:
         return max(0.0, self.similarity(x))
 

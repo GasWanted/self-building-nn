@@ -83,7 +83,7 @@ class Network:
             # Pass through: use activation-weighted combination of neuron weights
             # as input to next layer. This gives a representation, not just scalars.
             if layer.size > 0:
-                weights = np.array([n.w for n in layer.neurons])
+                weights = np.array([n.get_weights() for n in layer.neurons])
                 act_sum = acts.sum()
                 if act_sum > 1e-9:
                     h = (acts[:, None] * weights).sum(axis=0) / act_sum
@@ -106,7 +106,7 @@ class Network:
             # Propagate
             acts = layer.forward(h)
             if layer.size > 0:
-                weights = np.array([n.w for n in layer.neurons])
+                weights = np.array([n.get_weights() for n in layer.neurons])
                 act_sum = acts.sum()
                 if act_sum > 1e-9:
                     h = (acts[:, None] * weights).sum(axis=0) / act_sum
@@ -144,7 +144,7 @@ class Network:
             # Propagate
             acts = layer.forward(h)
             if layer.size > 0:
-                weights = np.array([n.w for n in layer.neurons])
+                weights = np.array([n.get_weights() for n in layer.neurons])
                 act_sum = acts.sum()
                 if act_sum > 1e-9:
                     h = (acts[:, None] * weights).sum(axis=0) / act_sum
@@ -166,7 +166,7 @@ class Network:
         if should_grow_width(sim, self.split_threshold):
             layer.grow(1, self.growth_noise)
             # Set the new neuron's initial position and label
-            layer.neurons[-1].w = x.copy() + np.random.randn(len(x)) * self.growth_noise
+            layer.neurons[-1].update(x, 1.0)  # lr=1.0 snaps weight to x
             layer.neurons[-1].label = label
             self.n_width_grows += 1
 

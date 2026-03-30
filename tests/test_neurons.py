@@ -64,3 +64,23 @@ class TestPerceptronNeuron:
         c = n.copy(noise=0.1)
         assert c.label == 3
         assert not np.allclose(c.w, n.w)
+
+
+class TestNeuronInterface:
+    def test_prototype_get_weights(self):
+        n = PrototypeNeuron(10, weights=np.ones(10))
+        w = n.get_weights()
+        assert w.shape == (10,)
+        assert np.allclose(w, np.ones(10))
+
+    def test_perceptron_get_weights(self):
+        n = PerceptronNeuron(10, weights=np.ones(10))
+        w = n.get_weights()
+        assert w.shape == (10,)
+        assert np.allclose(w, np.ones(10))
+
+    def test_get_weights_returns_copy(self):
+        n = PrototypeNeuron(10, weights=np.ones(10))
+        w = n.get_weights()
+        w[0] = 999
+        assert n.get_weights()[0] != 999
