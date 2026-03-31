@@ -55,3 +55,43 @@ def build_activation_map(positions: torch.Tensor, activations: torch.Tensor,
 
     amap[kept_feat.long(), kept_pos.long()] = kept_acts
     return amap.view(1, n_features, grid_h, grid_w)
+
+
+def extract_patches_batch(feature_maps: torch.Tensor, patch_size: int = 5,
+                          stride: int = 1) -> torch.Tensor:
+    """Batch patch extraction: (B, C, H, W) -> (B, n_patches, patch_dim).
+
+    One CUDA kernel for the entire batch.
+    """
+    # F.unfold: (B, C, H, W) -> (B, C*k*k, n_patches)
+    patches = F.unfold(feature_maps, kernel_size=patch_size, stride=stride)
+    return patches.permute(0, 2, 1)  # (B, n_patches, patch_dim)
+
+
+def build_activation_map_batch(positions: torch.Tensor, activations: torch.Tensor,
+                               grid_h: int, grid_w: int) -> torch.Tensor:
+    """Batch scatter: take max activation per position per image.
+
+    Args:
+        positions: (n_neurons, 2) of (row, col) — shared across batch
+        activations: (B, n_neurons)
+        grid_h, grid_w: output grid dimensions
+
+    Returns:
+        (B, 1, grid_h, grid_w) — one feature channel (max per position)
+    """
+    B = activations.shape[0]
+    device = activations.device
+    n_positions = grid_h * grid_w
+
+    flat_pos = positions[:, 0] * grid_w + positions[:, 1]  # (n_neurons,)
+    flat_pos = flat_pos.clamp(0, n_positions - 1)
+
+    # Expand flat_pos for batch: (B, n_neurons)
+    flat_pos_batch = flat_pos.unsqueeze(0).expand(B, -1)
+
+    # Scatter max: (B, n_positions)
+    output = torch.zeros(B, n_positions, device=device)
+    output.scatter_reduce_(1, flat_pos_batch, activations, reduce='amax', include_self=True)
+
+    return output.view(B, 1, grid_h, grid_w)
