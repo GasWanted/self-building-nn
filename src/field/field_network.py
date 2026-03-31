@@ -68,6 +68,14 @@ class FieldNetwork:
         # Precomputed gather indices per layer (invalidated on growth)
         self._gather_cache: dict[int, dict] = {}
 
+        # Depth growth: track readout loss plateau
+        self._loss_history: list[float] = []
+        self._loss_window = 30  # track last N mini-batch losses
+        self._depth_loss_threshold = 0.08  # loss above this = room for improvement
+        self._plateau_ratio = 0.85  # if recent loss / older loss > this = plateau
+        self._depth_cooldown = 0  # steps before next depth check allowed
+        self._depth_cooldown_period = 60000  # wait this many steps after adding a layer
+
         # Stats
         self.step = 0
         self.n_width_grows = 0
@@ -302,11 +310,18 @@ class FieldNetwork:
             if not self._readout_initialized or features.shape[1] != self.readout.feature_dim:
                 self.readout.resize(features.shape[1])
                 self._readout_initialized = True
-            self.readout.train_step(features, batch_labels[:B])
+            loss = self.readout.train_step(features, batch_labels[:B])
+            self._loss_history.append(loss)
+            if len(self._loss_history) > self._loss_window * 2:
+                self._loss_history = self._loss_history[-self._loss_window * 2:]
 
-            # Growth check
+            # Width growth check
             if self.step % (self.growth_interval * batch_size) < batch_size:
                 self._check_growth_fast()
+
+            # Depth growth check: is the readout struggling despite stable features?
+            if self.step % (batch_size * 20) < batch_size:
+                self._check_depth_growth()
 
     def learn(self, image: torch.Tensor, label: int):
         """Single-image learn (wraps train_batch)."""
@@ -353,6 +368,84 @@ class FieldNetwork:
                         torch.full((len(grow_W),), -1, dtype=torch.long, device=self.device),
                     )
                     self._gather_cache.pop(i, None)
+
+    def _check_depth_growth(self):
+        """Add a deeper layer if readout loss has plateaued but is still high.
+
+        The signal: "the readout can't improve with these features — it needs
+        richer features, which means a deeper hierarchy."
+
+        Plateau = recent loss is not much better than older loss.
+        Still high = loss is above a threshold (not already near-perfect).
+        """
+        if len(self.layers) >= self.max_depth:
+            return
+        if self._depth_cooldown > 0:
+            self._depth_cooldown -= 1
+            return
+        if len(self._loss_history) < self._loss_window * 2:
+            return  # not enough history yet
+
+        # Compare recent loss to older loss
+        older = self._loss_history[-self._loss_window * 2:-self._loss_window]
+        recent = self._loss_history[-self._loss_window:]
+        avg_older = sum(older) / len(older)
+        avg_recent = sum(recent) / len(recent)
+
+        if avg_older < 1e-9:
+            return  # avoid division by zero
+
+        # Is loss still high enough that improvement matters?
+        if avg_recent < self._depth_loss_threshold:
+            return  # already good enough, don't add depth
+
+        # Has loss plateaued? (recent is not much better than older)
+        ratio = avg_recent / avg_older
+        if ratio > self._plateau_ratio:
+            # Plateau detected — add a new layer
+            # New layer processes 5x5 patches of the current last layer's output
+            # Output map from last layer is (B, 1, H, W) → patches are (1*5*5=25)-dim
+            last_grid = self.layer_grid_sizes[-1] if self.layer_grid_sizes else (24, 24)
+            H_out = last_grid[0] - self.patch_size + 1
+            W_out = last_grid[1] - self.patch_size + 1
+
+            if H_out <= 0 or W_out <= 0:
+                return  # can't add another layer, grid too small
+
+            # New layer has 1-channel input → patch_dim = 25
+            new_patch_dim = self.patch_size * self.patch_size
+            new_layer = NeuronField(new_patch_dim, self.capacity_per_layer, str(self.device))
+
+            # Initialize with neurons at stride-2 positions
+            stride = 2
+            grid_h = (H_out - 1) // stride + 1
+            grid_w = (W_out - 1) // stride + 1
+            init_W = []
+            init_px = []
+            init_py = []
+            for r in range(grid_h):
+                for c in range(grid_w):
+                    init_py.append(r * stride)
+                    init_px.append(c * stride)
+                    init_W.append(torch.randn(new_patch_dim, device=self.device) * 0.1)
+
+            if init_W:
+                new_layer.add_neurons_batch(
+                    torch.stack(init_W),
+                    torch.tensor(init_px, dtype=torch.long, device=self.device),
+                    torch.tensor(init_py, dtype=torch.long, device=self.device),
+                    torch.full((len(init_W),), -1, dtype=torch.long, device=self.device),
+                )
+
+            self.layers.append(new_layer)
+            self.n_depth_grows += 1
+            self._loss_history.clear()  # reset so next plateau triggers next layer
+            self._gather_cache.clear()
+            self._readout_initialized = False  # readout needs resize
+            self._depth_cooldown = self._depth_cooldown_period  # wait before checking again
+
+            print(f"  DEPTH GROW: {self.n_layers} layers, new layer has {new_layer.n_alive} neurons, "
+                  f"grid=({H_out},{W_out}), loss_ratio={ratio:.3f}", flush=True)
 
     def total_neurons(self) -> int:
         return sum(l.n_alive for l in self.layers)
