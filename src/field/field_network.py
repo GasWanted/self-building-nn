@@ -268,21 +268,31 @@ class FieldNetwork:
 
                     merge_mask = best_sims >= self.merge_threshold
                     if merge_mask.any():
-                        # Use the INPUT to this layer for patch extraction
+                        # Vectorized Hebbian: batch extract patches, batch update
                         patches_all = extract_patches_batch(
                             layer_input_maps[li], self.patch_size, stride=1)
+                        # patches_all: (bs, n_positions, patch_dim)
 
-                        m_indices = merge_mask.nonzero(as_tuple=True)[0]
-                        for img_i in m_indices:
-                            img_i = int(img_i)
-                            local_best = int(best_local[img_i])
-                            global_best = int(info['alive_idx'][local_best])
-                            patch_idx = int(info['patch_indices'][local_best])
-                            if patch_idx < patches_all.shape[1] and \
-                               patches_all.shape[2] == layer.patch_dim:
-                                patch = patches_all[img_i, patch_idx]
-                                layer.W[global_best] += self.lr * (patch - layer.W[global_best])
-                            layer.labels[global_best] = int(batch_labels[img_i])
+                        if patches_all.shape[2] == layer.patch_dim:
+                            m_idx = merge_mask.nonzero(as_tuple=True)[0]
+                            m_local_best = best_local[m_idx]  # (n_merge,)
+                            m_global_best = info['alive_idx'][m_local_best]  # (n_merge,)
+                            m_patch_idx = info['patch_indices'][m_local_best]  # (n_merge,)
+
+                            # Gather target patches: (n_merge, patch_dim)
+                            target_patches = patches_all[m_idx, m_patch_idx]
+
+                            # Scatter-add update: accumulate lr*(patch - W) per neuron
+                            # Multiple images may target same neuron — average them
+                            unique_neurons = m_global_best.unique()
+                            for ni in unique_neurons:
+                                ni = int(ni)
+                                neuron_mask = m_global_best == ni
+                                avg_patch = target_patches[neuron_mask].mean(dim=0)
+                                layer.W[ni] += self.lr * (avg_patch - layer.W[ni])
+
+                            # Batch label update (last label wins)
+                            layer.labels[m_global_best] = batch_labels[m_idx]
 
                     self._gather_cache.pop(li, None)
 

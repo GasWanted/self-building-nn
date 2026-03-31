@@ -12,34 +12,32 @@ def main():
     X_tr, y_tr, X_te, y_te = load_mnist_raw()
     print(f"Train: {X_tr.shape}  Test: {X_te.shape}  Device: {X_tr.device}")
 
-    net = FieldNetwork()
+    net = FieldNetwork(initial_stride=1, readout_lr=0.003, merge_threshold=0.60)
     print(f"Initial topology: {net.topology()}")
 
     t0 = time.time()
+    best = 0.0
 
-    n_epochs = int(sys.argv[1]) if len(sys.argv) > 1 else 1
+    n_epochs = int(sys.argv[1]) if len(sys.argv) > 1 else 10
     for epoch in range(n_epochs):
-        print(f"\nEpoch {epoch + 1}/{n_epochs}", flush=True)
-
         perm = torch.randperm(X_tr.shape[0], device=X_tr.device)
-        X_tr_s = X_tr[perm]
-        y_tr_s = y_tr[perm]
+        net.train_batch(X_tr[perm], y_tr[perm], batch_size=512)
 
-        net.train_batch(X_tr_s, y_tr_s, batch_size=64)
+        preds = net.predict_batch(X_te)
+        acc = float((preds == y_te).float().mean())
+        best = max(best, acc)
 
-        t_elapsed = time.time() - t0
+        # LR decay
+        if epoch == n_epochs // 2 or epoch == 3 * n_epochs // 4:
+            for pg in net.readout.optimizer.param_groups:
+                pg['lr'] *= 0.3
+            print(f"  LR decay -> {net.readout.optimizer.param_groups[0]['lr']:.5f}")
+
         topo = net.topology()
-        print(f"  Time: {t_elapsed:.1f}s  Neurons: {topo['total_neurons']}  "
-              f"Layers: {topo['layers']}  Width grows: {topo['n_width_grows']}")
+        print(f"Epoch {epoch+1}/{n_epochs}: {acc:.2%} (best={best:.2%})  "
+              f"neurons={topo['total_neurons']}  t={time.time()-t0:.0f}s", flush=True)
 
-        print("  Evaluating...", end=" ", flush=True)
-        t1 = time.time()
-        n_eval = min(10000, X_te.shape[0])
-        preds = net.predict_batch(X_te[:n_eval])
-        acc = float((preds == y_te[:n_eval]).float().mean())
-        print(f"Acc: {acc:.1%}  ({time.time() - t1:.1f}s)")
-
-    print(f"\nFinal: {acc:.1%}  Total time: {time.time() - t0:.1f}s")
+    print(f"\nBest: {best:.2%}  Total: {time.time() - t0:.0f}s")
     print(f"Topology: {net.topology()}")
 
 

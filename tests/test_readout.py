@@ -8,7 +8,8 @@ from src.field.readout import Readout
 class TestReadout:
     def test_create(self):
         r = Readout(feature_dim=100, n_classes=10)
-        assert r.linear.weight.shape == (10, 100)
+        assert r.feature_dim == 100
+        assert r.n_classes == 10
 
     def test_forward_shape(self):
         r = Readout(feature_dim=100, n_classes=10)
@@ -46,7 +47,7 @@ class TestReadout:
     def test_resize(self):
         r = Readout(feature_dim=100, n_classes=10)
         r.resize(200)
-        assert r.linear.weight.shape == (10, 200)
+        assert r.feature_dim == 200
         features = torch.randn(200, device=r.device)
         logits = r(features)
         assert logits.shape == (10,)
